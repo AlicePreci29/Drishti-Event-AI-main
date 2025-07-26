@@ -1,4 +1,3 @@
-
 "use client"
 
 import { useState, useEffect, useRef } from 'react';
@@ -13,6 +12,7 @@ import { DetectAnomaliesOutput } from '@/ai/flows/detect-anomalies';
 
 const NUM_CAMERAS = 4;
 const ZONES = ["Zone A", "Zone B", "Zone C", "Zone D"];
+const IP_CAMERA_URL = "http://192.168.137.219:8080"; // Mobile IP Webcam
 
 function CameraFeed({
   cameraIndex,
@@ -35,68 +35,73 @@ function CameraFeed({
   const [isScanning, setIsScanning] = useState(false);
 
   const handleAnomalyDetection = async () => {
-      if (!hasCameraPermission || !videoRef.current || videoRef.current.readyState < 2) {
-        toast({
-          variant: "destructive",
-          title: "Camera Not Ready",
-          description: `Cannot scan ${ZONES[cameraIndex]} as the camera is not accessible or ready.`,
-        });
-        return;
-      }
-      
-      setIsScanning(true);
-      updateZoneStatus(cameraIndex, null, true);
+    const videoEl = videoRef.current;
 
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        setIsScanning(false);
-        updateZoneStatus(cameraIndex, null, false);
-        return;
-      }
-      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      const frameDataUri = canvas.toDataURL('image/jpeg');
+    if (!videoEl || videoEl.readyState < 2) {
+      toast({
+        variant: "destructive",
+        title: "Camera Not Ready",
+        description: `Cannot scan ${ZONES[cameraIndex]} - video not accessible.`,
+      });
+      return;
+    }
 
-      try {
-        const result = await runDetectAnomalies({ videoFeedDataUri: frameDataUri, location: location ?? undefined });
-        updateZoneStatus(cameraIndex, result, false);
-        
-        if (result.anomalyDetected && result.anomalyType !== "normal_walk") {
-          startAlarm();
-          const criticalAnomalies = ['panic_run', 'fall_detected', 'fight', 'entry_breach', 'object_abandon', 'overcrowd', 'hand_cover_face'];
-          const isCritical = criticalAnomalies.includes(result.anomalyType);
-          
-          let alertAction;
-          if (location) {
-            alertAction = {
-                label: 'View on Map',
-                url: `https://www.google.com/maps?q=${location.latitude},${location.longitude}`
-            }
-          }
+    setIsScanning(true);
+    updateZoneStatus(cameraIndex, null, true);
 
-          addAlert({
-            title: `${ZONES[cameraIndex]}: ${result.anomalyType}`,
-            description: result.description,
-            icon: Siren,
-            variant: isCritical ? 'destructive' : 'default',
-            action: alertAction,
-          });
+    const canvas = document.createElement('canvas');
+    canvas.width = videoEl.videoWidth;
+    canvas.height = videoEl.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      setIsScanning(false);
+      updateZoneStatus(cameraIndex, null, false);
+      return;
+    }
+    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    const frameDataUri = canvas.toDataURL('image/jpeg');
+
+    try {
+      const result = await runDetectAnomalies({
+        videoFeedDataUri: frameDataUri,
+        location: location ?? undefined,
+      });
+      updateZoneStatus(cameraIndex, result, false);
+
+      if (result.anomalyDetected && result.anomalyType !== "normal_walk") {
+        startAlarm();
+        const criticalAnomalies = ['panic_run', 'fall_detected', 'fight', 'entry_breach', 'object_abandon', 'overcrowd', 'hand_cover_face'];
+        const isCritical = criticalAnomalies.includes(result.anomalyType);
+
+        let alertAction;
+        if (location) {
+          alertAction = {
+            label: 'View on Map',
+            url: `https://www.google.com/maps?q=${location.latitude},${location.longitude}`
+          };
         }
-      } catch (error) {
-        console.error(`Anomaly detection for ${ZONES[cameraIndex]} failed:`, error);
-        toast({
-          variant: "destructive",
-          title: "Analysis Error",
-          description: `Failed to analyze ${ZONES[cameraIndex]}.`,
+
+        addAlert({
+          title: `${ZONES[cameraIndex]}: ${result.anomalyType}`,
+          description: result.description,
+          icon: Siren,
+          variant: isCritical ? 'destructive' : 'default',
+          action: alertAction,
         });
-        updateZoneStatus(cameraIndex, null, false);
-      } finally {
-        setIsScanning(false);
       }
+    } catch (error) {
+      console.error(`Anomaly detection for ${ZONES[cameraIndex]} failed:`, error);
+      toast({
+        variant: "destructive",
+        title: "Analysis Error",
+        description: `Failed to analyze ${ZONES[cameraIndex]}.`,
+      });
+      updateZoneStatus(cameraIndex, null, false);
+    } finally {
+      setIsScanning(false);
+    }
   };
-  
+
   return (
     <Card className="flex flex-col">
       <CardHeader>
@@ -107,14 +112,8 @@ function CameraFeed({
       <CardContent className="flex-grow flex flex-col justify-between space-y-4">
         <div className="aspect-video w-full rounded-md overflow-hidden relative bg-black">
           <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
-          {!hasCameraPermission && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 text-white">
-              <Camera className="w-8 h-8 mb-2"/>
-              <p className="text-sm">Camera access denied</p>
-            </div>
-          )}
         </div>
-        <Button onClick={handleAnomalyDetection} disabled={isScanning || !hasCameraPermission}>
+        <Button onClick={handleAnomalyDetection} disabled={isScanning}>
           {isScanning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
           {isScanning ? "Scanning..." : "Scan Zone"}
         </Button>
@@ -123,14 +122,14 @@ function CameraFeed({
   );
 }
 
-export function CctvPanel({ 
+export function CctvPanel({
   addAlert,
   updateZoneStatus,
   videoRefs,
   hasCameraPermission,
   setHasCameraPermission,
   location,
-}: { 
+}: {
   addAlert: (alert: Omit<AlertType, 'id' | 'time'>) => void;
   updateZoneStatus: (zoneIndex: number, result: DetectAnomaliesOutput | null, isLoading: boolean) => void;
   videoRefs: React.RefObject<HTMLVideoElement>[];
@@ -139,31 +138,32 @@ export function CctvPanel({
   location: { latitude: number; longitude: number; } | null;
 }) {
   const { toast } = useToast();
-  
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
-  const audioRef = useRef<{ audioContext: AudioContext | null, oscillator: OscillatorNode | null, gainNode: GainNode | null }>({ audioContext: null, oscillator: null, gainNode: null });
+  const audioRef = useRef<{ audioContext: AudioContext | null, oscillator: OscillatorNode | null, gainNode: GainNode | null }>({
+    audioContext: null,
+    oscillator: null,
+    gainNode: null
+  });
 
   const handleEmergencyCall = () => {
     window.location.href = "tel:9597428005";
   };
 
   const startAlarm = () => {
-    if (isAlarmPlaying) return; 
+    if (isAlarmPlaying) return;
 
     handleEmergencyCall();
 
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      if (!audioContext) return;
-      
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
 
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
-      
+
       oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(1500, audioContext.currentTime); 
+      oscillator.frequency.setValueAtTime(1500, audioContext.currentTime);
       gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
 
       oscillator.start();
@@ -185,37 +185,39 @@ export function CctvPanel({
   };
 
   useEffect(() => {
-    const getCameraPermission = async () => {
+    const setupCameras = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         setHasCameraPermission(true);
 
-        videoRefs.forEach(ref => {
+        videoRefs.forEach((ref, i) => {
           if (ref.current) {
-            ref.current.srcObject = stream;
+            if (i === 0) {
+              // Zone A uses laptop camera
+              ref.current.srcObject = stream;
+            } else if (i === 1) {
+              // Zone B uses IP webcam from phone
+              ref.current.src = IP_CAMERA_URL;
+            } else {
+              // Optional: Set blank or image source for others
+              ref.current.poster = "http://192.168.137.219:8080/greet.html";
+            }
           }
         });
       } catch (error) {
-        console.error('Error accessing camera:', error);
+        console.error("Error accessing webcam:", error);
         setHasCameraPermission(false);
         toast({
-          variant: 'destructive',
-          title: 'Camera Access Denied',
-          description: 'Please enable camera permissions in your browser settings to use this feature.',
+          variant: "destructive",
+          title: "Camera Access Denied",
+          description: "Please enable camera access for Zone A in browser settings.",
         });
       }
     };
 
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices) {
-        getCameraPermission();
-    }
-    
-    // Cleanup audio on component unmount
-    return () => {
-        stopAlarm();
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toast, setHasCameraPermission]); // videoRefs is stable
+    setupCameras();
+    return () => stopAlarm();
+  }, [videoRefs, setHasCameraPermission, toast]);
 
   return (
     <Card className="h-full flex flex-col">
@@ -227,8 +229,8 @@ export function CctvPanel({
           </div>
           {isAlarmPlaying && (
             <Button variant="destructive" onClick={stopAlarm}>
-                <StopCircle className="mr-2 h-4 w-4" />
-                Stop Alarm
+              <StopCircle className="mr-2 h-4 w-4" />
+              Stop Alarm
             </Button>
           )}
         </CardTitle>
@@ -248,13 +250,13 @@ export function CctvPanel({
             />
           ))}
         </div>
-         {!hasCameraPermission && (
-            <Alert variant="destructive">
-              <AlertTitle>Camera Access Required</AlertTitle>
-              <AlertDescription>
-                Please allow camera access in your browser to see the live feeds. The same feed will be shown on all screens.
-              </AlertDescription>
-            </Alert>
+        {!hasCameraPermission && (
+          <Alert variant="destructive">
+            <AlertTitle>Camera Access Required</AlertTitle>
+            <AlertDescription>
+              Please allow camera access in your browser for Zone A. Zone B pulls from your phone's IP Webcam.
+            </AlertDescription>
+          </Alert>
         )}
       </CardContent>
     </Card>
